@@ -1,0 +1,17 @@
+# Virtual Environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Dataset (do NOT push raw data)
+data/raw/
+data/processed/
+
+# Trained models
+model/model.h5
+
+# OS junk
+.DS_Store
+Thumbs.db
