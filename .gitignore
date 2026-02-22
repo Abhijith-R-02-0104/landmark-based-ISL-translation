@@ -5,12 +5,11 @@ venv/
 __pycache__/
 *.pyc
 
-# Dataset (do NOT push raw data)
-data/raw/
-data/processed/
+# Dataset (ignore entire backend data folder)
+backend/data/
 
 # Trained models
-model/model.h5
+backend/model/*.h5
 
 # OS junk
 .DS_Store
