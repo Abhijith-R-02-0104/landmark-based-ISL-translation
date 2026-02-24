@@ -37,6 +37,8 @@ starting_index = existing_samples + 1
 # ================= CAMERA =================
 cap = cv2.VideoCapture(0)
 
+exit_program = False
+
 for sample_num in range(starting_index, starting_index + num_samples):
 
     print(f"\nGet Ready for Sample {sample_num}")
@@ -65,26 +67,49 @@ for sample_num in range(starting_index, starting_index + num_samples):
                 for lm in hand_landmarks.landmark:
                     landmarks.append([lm.x, lm.y, lm.z])
 
-                sequence.append(landmarks)
-                frame_count += 1
+                # Safety check: ensure 21 landmarks
+                if len(landmarks) == 21:
+                    sequence.append(landmarks)
+                    frame_count += 1
+        else:
+            cv2.putText(frame, "No Hand Detected",
+                        (10, 140),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 0, 255),
+                        2)
 
         # Display Info
         cv2.putText(frame, f"Person: {person_name}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7, (255, 255, 0), 2)
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 0),
+                    2)
 
         cv2.putText(frame, f"Gesture: {gesture_name}",
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7, (255, 255, 0), 2)
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 0),
+                    2)
 
         cv2.putText(frame, f"Recording: {frame_count}/{FRAMES_PER_SAMPLE}",
-                    (10, 100), cv2.FONT_HERSHEY_SIMPLEX,
-                    1, (0, 255, 0), 2)
+                    (10, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),
+                    2)
 
         cv2.imshow("Data Collection", frame)
 
+        # Press Q to exit entire program
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            exit_program = True
             break
+
+    if exit_program:
+        break
 
     sequence = np.array(sequence)
 
