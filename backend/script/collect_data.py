@@ -7,11 +7,11 @@ import time
 # ================= CONFIG =================
 FRAMES_PER_SAMPLE = 30
 
-# Get backend directory dynamically
+# ================= PATHS =================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_PATH = os.path.join(BASE_DIR, "data", "raw")
 
-# ================= MEDIAPIPE INIT =================
+# ================= MEDIAPIPE =================
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
@@ -30,7 +30,7 @@ num_samples = int(input("Number of Samples to Record: "))
 gesture_path = os.path.join(DATA_PATH, person_name, gesture_name)
 os.makedirs(gesture_path, exist_ok=True)
 
-# Auto-detect next sample number
+# auto-detect next sample number
 existing_samples = len(os.listdir(gesture_path))
 starting_index = existing_samples + 1
 
@@ -48,29 +48,43 @@ for sample_num in range(starting_index, starting_index + num_samples):
     frame_count = 0
 
     while frame_count < FRAMES_PER_SAMPLE:
+
         ret, frame = cap.read()
         if not ret:
             break
 
         frame = cv2.flip(frame, 1)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
         results = hands.process(rgb)
 
         if results.multi_hand_landmarks:
+
             for hand_landmarks in results.multi_hand_landmarks:
 
                 mp_draw.draw_landmarks(
-                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
+                    frame,
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS
                 )
 
                 landmarks = []
-                for lm in hand_landmarks.landmark:
-                    landmarks.append([lm.x, lm.y, lm.z])
 
-                # Safety check: ensure 21 landmarks
+                # wrist reference point
+                wrist = hand_landmarks.landmark[0]
+                wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
+
+                for lm in hand_landmarks.landmark:
+                    landmarks.append([
+                        lm.x - wrist_x,
+                        lm.y - wrist_y,
+                        lm.z - wrist_z
+                    ])
+
                 if len(landmarks) == 21:
                     sequence.append(landmarks)
                     frame_count += 1
+
         else:
             cv2.putText(frame, "No Hand Detected",
                         (10, 140),
@@ -79,22 +93,26 @@ for sample_num in range(starting_index, starting_index + num_samples):
                         (0, 0, 255),
                         2)
 
-        # Display Info
-        cv2.putText(frame, f"Person: {person_name}",
+        # ================= DISPLAY INFO =================
+
+        cv2.putText(frame,
+                    f"Person: {person_name}",
                     (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (255, 255, 0),
                     2)
 
-        cv2.putText(frame, f"Gesture: {gesture_name}",
+        cv2.putText(frame,
+                    f"Gesture: {gesture_name}",
                     (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (255, 255, 0),
                     2)
 
-        cv2.putText(frame, f"Recording: {frame_count}/{FRAMES_PER_SAMPLE}",
+        cv2.putText(frame,
+                    f"Recording: {frame_count}/{FRAMES_PER_SAMPLE}",
                     (10, 100),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,
@@ -103,7 +121,6 @@ for sample_num in range(starting_index, starting_index + num_samples):
 
         cv2.imshow("Data Collection", frame)
 
-        # Press Q to exit entire program
         if cv2.waitKey(1) & 0xFF == ord('q'):
             exit_program = True
             break
@@ -113,11 +130,18 @@ for sample_num in range(starting_index, starting_index + num_samples):
 
     sequence = np.array(sequence)
 
-    # Only save if full sequence captured
+    # save only full sequences
     if sequence.shape[0] == FRAMES_PER_SAMPLE:
-        save_path = os.path.join(gesture_path, f"sample_{sample_num}.npy")
+
+        save_path = os.path.join(
+            gesture_path,
+            f"sample_{sample_num}.npy"
+        )
+
         np.save(save_path, sequence)
+
         print(f"Saved: {save_path}")
+
     else:
         print("Incomplete sequence detected. Sample discarded.")
 

@@ -13,7 +13,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow all for now
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,6 +36,11 @@ hands = mp_hands.Hands(
     min_tracking_confidence=0.7
 )
 
+# ================= PARAMETERS =================
+SEQUENCE_LENGTH = 30
+CONFIRM_THRESHOLD = 3
+CONFIDENCE_THRESHOLD = 0.80
+
 # ================= STATE =================
 sequence = []
 last_prediction = None
@@ -46,57 +51,70 @@ sentence = []
 class FrameData(BaseModel):
     image: str
 
+
 @app.post("/predict")
 async def predict(data: FrameData):
+
     global sequence, last_prediction, confirm_count, sentence
 
-    # Decode base64 image
+    # ===== Decode Image =====
     image_data = data.image.split(",")[1]
     decoded = base64.b64decode(image_data)
+
     np_arr = np.frombuffer(decoded, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
     frame = cv2.flip(frame, 1)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    # ===== MEDIAPIPE PROCESS =====
+    # ===== MediaPipe =====
     results = hands.process(rgb)
 
-    print("Hands detected:", results.multi_hand_landmarks is not None)
-
     if results.multi_hand_landmarks:
+
         for hand_landmarks in results.multi_hand_landmarks:
+
+            # wrist normalization
+            wrist = hand_landmarks.landmark[0]
+            wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
+
             landmarks = []
+
             for lm in hand_landmarks.landmark:
-                landmarks.extend([lm.x, lm.y, lm.z])
+                landmarks.extend([
+                    lm.x - wrist_x,
+                    lm.y - wrist_y,
+                    lm.z - wrist_z
+                ])
 
             sequence.append(landmarks)
 
-        print("Sequence length:", len(sequence))
+            # sliding window
+            if len(sequence) > SEQUENCE_LENGTH:
+                sequence = sequence[-SEQUENCE_LENGTH:]
 
-    # ===== MODEL PREDICTION =====
-    print("Sequence length:", len(sequence))
-    
-    if len(sequence) == 30:
-        input_data = np.array(sequence).reshape(1, 30, 63)
+    # ===== Prediction =====
+    if len(sequence) == SEQUENCE_LENGTH:
+
+        input_data = np.array(sequence).reshape(1, SEQUENCE_LENGTH, 63)
+
         prediction = model.predict(input_data, verbose=0)
 
         predicted_class = labels[np.argmax(prediction)]
         confidence = float(np.max(prediction))
 
-        print("Predicted:", predicted_class, "Confidence:", confidence)
+        if confidence > CONFIDENCE_THRESHOLD:
 
-        if predicted_class == last_prediction:
-            confirm_count += 1
-        else:
-            confirm_count = 1
-            last_prediction = predicted_class
+            if predicted_class == last_prediction:
+                confirm_count += 1
+            else:
+                confirm_count = 1
+                last_prediction = predicted_class
 
-        if confirm_count >= 2:
-            if len(sentence) == 0 or sentence[-1] != predicted_class:
-                sentence.append(predicted_class)
+            if confirm_count >= CONFIRM_THRESHOLD:
 
-        sequence = []
+                if len(sentence) == 0 or sentence[-1] != predicted_class:
+                    sentence.append(predicted_class)
 
         return {
             "letter": predicted_class,
