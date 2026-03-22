@@ -21,3 +21,8 @@ dist/
 # ================= OS FILES =================
 .DS_Store
 Thumbs.db
+
+node_modules/
+front-end/node_modules/
+landmark-based-ISL-translation/
+venv/
