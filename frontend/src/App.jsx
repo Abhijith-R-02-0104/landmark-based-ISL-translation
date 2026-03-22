@@ -26,45 +26,45 @@ function App() {
   // ================= DETECTION LOOP =================
   useEffect(() => {
 
-    let interval;
+  let interval;
 
-    if (isDetecting) {
+  if (isDetecting) {
 
-      interval = setInterval(async () => {
+    interval = setInterval(() => {
 
-        if (!webcamRef.current) return;
+      if (!webcamRef.current) return;
 
-        const image = webcamRef.current.capture();
-        if (!image) return;
+      const image = webcamRef.current.capture();
+      if (!image) return;
 
-        const result = await predictFrame(image);
+      // 🔥 NON-BLOCKING CALL (IMPORTANT)
+      predictFrame(image).then((result) => {
 
-        if (result) {
+        if (!result) return;
 
-          setPredictedLetter(result.letter || "-");
-          setConfidence(result.confidence || 0);
+        setPredictedLetter(result.letter || "-");
+        setConfidence(result.confidence || 0);
 
-          // sentence update
-          if (result.current_word !== lastSpoken) {
+        // sentence update
+        if (result.current_word !== lastSpoken) {
 
-            setCurrentWord(result.current_word);
+          setCurrentWord(result.current_word);
 
-            if (result.current_word !== "") {
-
-              speakSentence(result.current_word);
-
-              setLastSpoken(result.current_word);
-            }
+          if (result.current_word !== "") {
+            speakSentence(result.current_word);
+            setLastSpoken(result.current_word);
           }
         }
 
-      }, 600); // capture every 600ms
+      });
 
-    }
+    }, 70);  // 🔥 CHANGED FROM 600 → 70
 
-    return () => clearInterval(interval);
+  }
 
-  }, [isDetecting, lastSpoken]);
+  return () => clearInterval(interval);
+
+}, [isDetecting, lastSpoken]);
 
   // ================= CLEAR SENTENCE =================
   const clearSentence = () => {

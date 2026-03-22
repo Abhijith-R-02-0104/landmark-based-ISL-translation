@@ -22,11 +22,17 @@ const WebcamView = forwardRef((props, ref) => {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      
       <Webcam
         ref={webcamRef}
         audio={false}
         screenshotFormat="image/jpeg"
-        videoConstraints={{ facingMode: "user" }}
+        screenshotQuality={1}   // 🔥 HIGH QUALITY FRAME
+        videoConstraints={{
+          width: 640,          // 🔥 FIXED RESOLUTION
+          height: 480,
+          facingMode: "user"
+        }}
         style={{
           width: "480px",
           height: "360px",
@@ -39,6 +45,7 @@ const WebcamView = forwardRef((props, ref) => {
       <h2 style={{ marginTop: "16px" }}>
         Prediction: {prediction}
       </h2>
+
     </div>
   );
 });

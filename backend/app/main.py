@@ -7,6 +7,7 @@ import numpy as np
 import base64
 from tensorflow.keras.models import load_model
 import os
+import time
 
 # ================= INIT APP =================
 app = FastAPI()
@@ -38,14 +39,13 @@ hands = mp_hands.Hands(
 
 # ================= PARAMETERS =================
 SEQUENCE_LENGTH = 30
-CONFIRM_THRESHOLD = 3
-CONFIDENCE_THRESHOLD = 0.80
+CONFIDENCE_THRESHOLD = 0.85   # 🔥 stronger threshold
+COOLDOWN_TIME = 0.8           # 🔥 faster switching
 
 # ================= STATE =================
 sequence = []
-last_prediction = None
-confirm_count = 0
 sentence = []
+last_prediction_time = 0
 
 # ================= REQUEST MODEL =================
 class FrameData(BaseModel):
@@ -55,7 +55,7 @@ class FrameData(BaseModel):
 @app.post("/predict")
 async def predict(data: FrameData):
 
-    global sequence, last_prediction, confirm_count, sentence
+    global sequence, sentence, last_prediction_time
 
     # ===== Decode Image =====
     image_data = data.image.split(",")[1]
@@ -64,40 +64,52 @@ async def predict(data: FrameData):
     np_arr = np.frombuffer(decoded, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
+    if frame is None:
+        return {
+            "letter": "-",
+            "confidence": 0.0,
+            "current_word": " ".join(sentence)
+        }
+
     frame = cv2.flip(frame, 1)
+    frame = cv2.resize(frame, (640, 480))
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     # ===== MediaPipe =====
     results = hands.process(rgb)
 
-    if results.multi_hand_landmarks:
+    if not results.multi_hand_landmarks:
+        sequence = []
+        return {
+            "letter": "-",
+            "confidence": 0.0,
+            "current_word": " ".join(sentence)
+        }
 
-        for hand_landmarks in results.multi_hand_landmarks:
+    # ===== LANDMARKS =====
+    for hand_landmarks in results.multi_hand_landmarks:
 
-            # wrist normalization
-            wrist = hand_landmarks.landmark[0]
-            wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
+        wrist = hand_landmarks.landmark[0]
+        wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
 
-            landmarks = []
+        landmarks = []
 
-            for lm in hand_landmarks.landmark:
-                landmarks.extend([
-                    lm.x - wrist_x,
-                    lm.y - wrist_y,
-                    lm.z - wrist_z
-                ])
+        for lm in hand_landmarks.landmark:
+            landmarks.extend([
+                lm.x - wrist_x,
+                lm.y - wrist_y,
+                lm.z - wrist_z
+            ])
 
-            sequence.append(landmarks)
+        sequence.append(landmarks)
 
-            # sliding window
-            if len(sequence) > SEQUENCE_LENGTH:
-                sequence = sequence[-SEQUENCE_LENGTH:]
+        if len(sequence) > SEQUENCE_LENGTH:
+            sequence = sequence[-SEQUENCE_LENGTH:]
 
-    # ===== Prediction =====
+    # ===== PREDICTION =====
     if len(sequence) == SEQUENCE_LENGTH:
 
         input_data = np.array(sequence).reshape(1, SEQUENCE_LENGTH, 63)
-
         prediction = model.predict(input_data, verbose=0)
 
         predicted_class = labels[np.argmax(prediction)]
@@ -105,22 +117,22 @@ async def predict(data: FrameData):
 
         if confidence > CONFIDENCE_THRESHOLD:
 
-            if predicted_class == last_prediction:
-                confirm_count += 1
-            else:
-                confirm_count = 1
-                last_prediction = predicted_class
+            current_time = time.time()
 
-            if confirm_count >= CONFIRM_THRESHOLD:
+            # 🔥 cooldown check
+            if current_time - last_prediction_time > COOLDOWN_TIME:
 
                 if len(sentence) == 0 or sentence[-1] != predicted_class:
                     sentence.append(predicted_class)
 
-        return {
-            "letter": predicted_class,
-            "confidence": confidence,
-            "current_word": " ".join(sentence)
-        }
+                last_prediction_time = current_time
+                sequence = []   # reset for next gesture
+
+                return {
+                    "letter": predicted_class,
+                    "confidence": confidence,
+                    "current_word": " ".join(sentence)
+                }
 
     return {
         "letter": "-",

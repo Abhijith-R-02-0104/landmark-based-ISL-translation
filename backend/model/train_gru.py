@@ -3,6 +3,7 @@ import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import GRU, Dense, Dropout
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 
@@ -21,9 +22,20 @@ for person in os.listdir(DATA_PATH):
 
     person_path = os.path.join(DATA_PATH, person)
 
+    if not os.path.isdir(person_path):
+        continue
+
+    # 🔥 Skip empty folders
+    if len(os.listdir(person_path)) == 0:
+        print(f"Skipping empty person folder: {person}")
+        continue
+
     for gesture in os.listdir(person_path):
 
         gesture_path = os.path.join(person_path, gesture)
+
+        if not os.path.isdir(gesture_path):
+            continue
 
         for file in os.listdir(gesture_path):
 
@@ -43,6 +55,11 @@ for person in os.listdir(DATA_PATH):
 
                 X.append(data)
                 y.append(gesture)
+
+# ================= CHECK DATA =================
+if len(X) == 0:
+    print("❌ No valid data found. Check dataset.")
+    exit()
 
 X = np.array(X)
 y = np.array(y)
@@ -93,13 +110,21 @@ model.compile(
 
 model.summary()
 
+# ================= EARLY STOPPING =================
+early_stop = EarlyStopping(
+    monitor='val_loss',
+    patience=5,
+    restore_best_weights=True
+)
+
 # ================= TRAIN =================
 history = model.fit(
     X_train,
     y_train,
     epochs=25,
     batch_size=8,
-    validation_data=(X_test, y_test)
+    validation_data=(X_test, y_test),
+    callbacks=[early_stop]
 )
 
 # ================= SAVE MODEL =================
@@ -107,5 +132,9 @@ model_path = os.path.join(MODEL_DIR, "model.h5")
 
 model.save(model_path)
 
-print("\nModel saved to:", model_path)
-print("Training complete.")
+print("\n✅ Model saved to:", model_path)
+print("✅ Training complete.")
+
+# ================= EVALUATE =================
+loss, acc = model.evaluate(X_test, y_test)
+print(f"\n🎯 Test Accuracy: {acc * 100:.2f}%")
