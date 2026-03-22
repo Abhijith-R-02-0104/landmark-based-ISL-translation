@@ -14,3 +14,8 @@ backend/model/*.h5
 # OS junk
 .DS_Store
 Thumbs.db
+
+node_modules/
+front-end/node_modules/
+landmark-based-ISL-translation/
+venv/
