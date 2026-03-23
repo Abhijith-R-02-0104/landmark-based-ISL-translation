@@ -82,38 +82,44 @@ export default function Detect() {
     usePageTitle("Detection");
     const navigate = useNavigate();
     const toast = useToast();
-    const videoRef = useRef(null);
-    const fsVideoRef = useRef(null);
-    const canvasRef = useRef(null);
-    const streamRef = useRef(null);
-    const typingRef = useRef(null);
-    const confAnimRef = useRef(null);
-    const confCurRef = useRef(0);
-    const prevSentRef = useRef("");
-    const prevWordRef = useRef("");
 
-    const [cameraActive, setCameraActive] = useState(false);
-    const [isDetecting, setIsDetecting] = useState(false);
-    const [isPredicting, setIsPredicting] = useState(false);
-    const [isFullscreen, setIsFullscreen] = useState(false);
+    const videoRef      = useRef(null);
+    const fsVideoRef    = useRef(null);
+    const canvasRef     = useRef(null);
+    const streamRef     = useRef(null);
+    const typingRef     = useRef(null);
+    const confAnimRef   = useRef(null);
+    const confCurRef    = useRef(0);
+    const prevSentRef   = useRef("");
+    const prevWordRef   = useRef("");
+
+    const [cameraActive,    setCameraActive]    = useState(false);
+    const [isDetecting,     setIsDetecting]     = useState(false);
+    const [isPredicting,    setIsPredicting]    = useState(false);
+    const [isFullscreen,    setIsFullscreen]    = useState(false);
     const [predictedLetter, setPredictedLetter] = useState("—");
-    const [letterKey, setLetterKey] = useState(0);
-    const [confidence, setConfidence] = useState(0);
-    const [displayConf, setDisplayConf] = useState(0);
-    const [currentWord, setCurrentWord] = useState("");
-    const [wordFlash, setWordFlash] = useState(false);
-    const [wordKey, setWordKey] = useState(0);
-    const [typedSentence, setTypedSentence] = useState("");
-    const [sentence, setSentence] = useState([]);
-    const [error, setError] = useState(null);
+    const [letterKey,       setLetterKey]       = useState(0);
+    const [confidence,      setConfidence]      = useState(0);
+    const [displayConf,     setDisplayConf]     = useState(0);
+    const [currentWord,     setCurrentWord]     = useState("");
+    const [wordFlash,       setWordFlash]       = useState(false);
+    const [wordKey,         setWordKey]         = useState(0);
+    const [typedSentence,   setTypedSentence]   = useState("");
+    const [sentence,        setSentence]        = useState([]);
+    const [error,           setError]           = useState(null);
 
     // ── Camera ────────────────────────────────────────────────
     const startCamera = async () => {
         setError(null);
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480, facingMode: "user" }
+            });
             streamRef.current = stream;
-            if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+            if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                await videoRef.current.play();
+            }
             setCameraActive(true);
             toast.success("Camera started", { title: "Camera Active" });
         } catch {
@@ -123,7 +129,9 @@ export default function Detect() {
     };
 
     const stopCamera = () => {
-        setIsDetecting(false); setIsPredicting(false); setIsFullscreen(false);
+        setIsDetecting(false);
+        setIsPredicting(false);
+        setIsFullscreen(false);
         streamRef.current?.getTracks().forEach(t => t.stop());
         streamRef.current = null;
         if (videoRef.current) videoRef.current.srcObject = null;
@@ -131,40 +139,59 @@ export default function Detect() {
         toast.info("Camera stopped", { title: "Camera Off" });
     };
 
+    // ── Frame Capture ─────────────────────────────────────────
+    // FIX: Returns the full dataURL (not pre-split).
+    // The backend or api.js should strip the prefix — not the capture step.
     const captureFrame = useCallback(() => {
-        const v = videoRef.current, c = canvasRef.current;
+        const v = videoRef.current;
+        const c = canvasRef.current;
         if (!v || !c || v.readyState < 2) return null;
-        c.width = v.videoWidth || 640; c.height = v.videoHeight || 480;
+        c.width  = v.videoWidth  || 640;
+        c.height = v.videoHeight || 480;
         c.getContext("2d").drawImage(v, 0, 0);
-        return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+        return c.toDataURL("image/jpeg", 1.0); // full dataURL — no split here
     }, []);
 
     // ── Detection Loop ─────────────────────────────────────────
+    // FIX 1: Guard with `if (isPredicting) return` — skip frames while busy.
+    // FIX 2: `isPredicting` added to deps so the guard always sees current value.
+    // FIX 3: Interval at 100 ms (was 600 ms) for responsive real-time detection.
     useEffect(() => {
         let interval = null;
         if (isDetecting) {
             interval = setInterval(async () => {
+                // ✅ Skip this tick entirely if a prediction is already in-flight
+                if (isPredicting) return;
+
                 const frame = captureFrame();
                 if (!frame) return;
+
                 setIsPredicting(true);
                 const result = await predictFrame(frame);
                 setIsPredicting(false);
+
                 if (result) {
                     const letter = result.letter || "—";
-                    setPredictedLetter(prev => { if (prev !== letter) setLetterKey(k => k + 1); return letter; });
+                    setPredictedLetter(prev => {
+                        if (prev !== letter) setLetterKey(k => k + 1);
+                        return letter;
+                    });
                     setConfidence(result.confidence || 0);
                     setCurrentWord(result.current_word || "");
+
                     if (result.current_word) {
                         setSentence(prev => {
                             const last = prev[prev.length - 1];
-                            return last !== result.current_word ? [...prev, result.current_word] : prev;
+                            return last !== result.current_word
+                                ? [...prev, result.current_word]
+                                : prev;
                         });
                     }
                 }
-            }, 600);
+            }, 100); // ✅ 100 ms — matches Doc 2
         }
         return () => { if (interval) clearInterval(interval); };
-    }, [isDetecting, captureFrame]);
+    }, [isDetecting, isPredicting, captureFrame]); // ✅ isPredicting in deps
 
     // ── Smooth Confidence ─────────────────────────────────────
     const confPct = Math.round(confidence > 1 ? confidence : confidence * 100);
@@ -173,9 +200,10 @@ export default function Detect() {
         const start = confCurRef.current, target = confPct;
         const startTime = performance.now(), duration = 450;
         const animate = (now) => {
-            const p = Math.min((now - startTime) / duration, 1);
+            const p   = Math.min((now - startTime) / duration, 1);
             const val = Math.round(start + (target - start) * (1 - Math.pow(1 - p, 3)));
-            confCurRef.current = val; setDisplayConf(val);
+            confCurRef.current = val;
+            setDisplayConf(val);
             if (p < 1) confAnimRef.current = requestAnimationFrame(animate);
         };
         confAnimRef.current = requestAnimationFrame(animate);
@@ -186,7 +214,8 @@ export default function Detect() {
     useEffect(() => {
         if (currentWord && currentWord !== prevWordRef.current) {
             prevWordRef.current = currentWord;
-            setWordFlash(true); setWordKey(k => k + 1);
+            setWordFlash(true);
+            setWordKey(k => k + 1);
             const t = setTimeout(() => setWordFlash(false), 750);
             return () => clearTimeout(t);
         }
@@ -212,11 +241,11 @@ export default function Detect() {
         if (streamRef.current) {
             if (videoRef.current) {
                 videoRef.current.srcObject = streamRef.current;
-                videoRef.current.play().catch(() => { });
+                videoRef.current.play().catch(() => {});
             }
             if (fsVideoRef.current) {
                 fsVideoRef.current.srcObject = streamRef.current;
-                fsVideoRef.current.play().catch(() => { });
+                fsVideoRef.current.play().catch(() => {});
             }
         }
     }, [isFullscreen]);
@@ -227,7 +256,8 @@ export default function Detect() {
         toast.success("Detection is running", { title: "Detection Started" });
     };
     const handleStopDetection = () => {
-        setIsDetecting(false); setIsPredicting(false);
+        setIsDetecting(false);
+        setIsPredicting(false);
         toast.warning("Detection has stopped", { title: "Detection Stopped" });
     };
     const handleClear = () => {
@@ -252,7 +282,7 @@ export default function Detect() {
         const utt = new SpeechSynthesisUtterance(typedSentence);
         utt.rate = 0.95; utt.pitch = 1; utt.volume = 1;
         utt.onstart = () => toast.info("Reading sentence aloud...", { title: "Speaking" });
-        utt.onerror = () => toast.error("Speech failed — try again");
+        utt.onerror  = () => toast.error("Speech failed — try again");
         window.speechSynthesis.speak(utt);
     };
 
@@ -262,7 +292,7 @@ export default function Detect() {
         if (!isDetecting) return;
         const check = setInterval(async () => {
             try {
-                const res = await fetch("http://localhost:8000/status");
+                const res    = await fetch("http://localhost:8000/status");
                 const online = res.ok;
                 if (!online && wasOnlineRef.current) {
                     toast.error("Backend went offline during detection!", { title: "Connection Lost" });
@@ -289,50 +319,96 @@ export default function Detect() {
         return () => window.removeEventListener("keydown", onKey);
     }, []);
 
+    // ── Derived display values ────────────────────────────────
     const confZone = displayConf >= 80
-        ? { label: "High", color: "var(--accent)", bar: "linear-gradient(90deg,var(--accent),#0abf97)" }
+        ? { label: "High",   color: "var(--accent)", bar: "linear-gradient(90deg,var(--accent),#0abf97)" }
         : displayConf >= 50
-            ? { label: "Medium", color: "#f59e0b", bar: "linear-gradient(90deg,#f59e0b,#d97706)" }
-            : { label: "Low", color: "#ef4444", bar: "linear-gradient(90deg,#ef4444,#dc2626)" };
+            ? { label: "Medium", color: "#f59e0b",      bar: "linear-gradient(90deg,#f59e0b,#d97706)" }
+            : { label: "Low",    color: "#ef4444",      bar: "linear-gradient(90deg,#ef4444,#dc2626)" };
 
-    const statusLabel = !cameraActive ? "Camera Off" : isDetecting ? (isPredicting ? "Analyzing..." : "Detecting...") : "Camera Ready";
-    const statusColor = !cameraActive ? "var(--text-faint)" : isDetecting ? "var(--accent)" : "var(--text-muted)";
+    const statusLabel = !cameraActive ? "Camera Off"
+        : isDetecting ? (isPredicting ? "Analyzing..." : "Detecting...")
+        : "Camera Ready";
+    const statusColor = !cameraActive ? "var(--text-faint)"
+        : isDetecting ? "var(--accent)"
+        : "var(--text-muted)";
 
-    // ── FULLSCREEN — rendered via Portal directly to body ─────
+    // ── Fullscreen portal ─────────────────────────────────────
     const fullscreenEl = isFullscreen && cameraActive ? (
         <div className="fs-overlay">
             <style>{CSS}</style>
             <canvas ref={canvasRef} style={{ display: "none" }} />
-            <video ref={fsVideoRef} style={{ width: "100%", height: "100%", objectFit: "contain", transform: "scaleX(-1)" }} muted playsInline autoPlay />
+            <video
+                ref={fsVideoRef}
+                style={{ width: "100%", height: "100%", objectFit: "contain", transform: "scaleX(-1)" }}
+                muted playsInline autoPlay
+            />
 
-            {isDetecting && <div style={{ position: "absolute", left: 0, right: 0, height: "2px", background: "linear-gradient(90deg,transparent,rgba(16,232,184,0.5),transparent)", animation: "scanline 2.8s ease-in-out infinite", pointerEvents: "none" }} />}
+            {isDetecting && (
+                <div style={{
+                    position: "absolute", left: 0, right: 0, height: "2px",
+                    background: "linear-gradient(90deg,transparent,rgba(16,232,184,0.5),transparent)",
+                    animation: "scanline 2.8s ease-in-out infinite", pointerEvents: "none"
+                }} />
+            )}
+
             {isDetecting && (
                 <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-                    {[{ top: "20px", left: "20px", borderRight: "none", borderBottom: "none" }, { top: "20px", right: "20px", borderLeft: "none", borderBottom: "none" }, { bottom: "120px", left: "20px", borderRight: "none", borderTop: "none" }, { bottom: "120px", right: "20px", borderLeft: "none", borderTop: "none" }].map((st, i) => (
-                        <div key={i} style={{ position: "absolute", width: "32px", height: "32px", border: "2px solid var(--accent)", opacity: 0.85, ...st }} />
+                    {[
+                        { top: "20px",    left:  "20px",  borderRight: "none", borderBottom: "none" },
+                        { top: "20px",    right: "20px",  borderLeft:  "none", borderBottom: "none" },
+                        { bottom: "120px",left:  "20px",  borderRight: "none", borderTop:    "none" },
+                        { bottom: "120px",right: "20px",  borderLeft:  "none", borderTop:    "none" },
+                    ].map((st, i) => (
+                        <div key={i} style={{
+                            position: "absolute", width: "32px", height: "32px",
+                            border: "2px solid var(--accent)", opacity: 0.85, ...st
+                        }} />
                     ))}
                 </div>
             )}
+
             {isDetecting && (
-                <div style={{ position: "absolute", top: "20px", left: "20px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 14px", borderRadius: "999px", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", border: "1px solid rgba(16,232,184,0.35)", fontSize: "11px", fontWeight: 700, letterSpacing: "0.1em", color: "var(--accent)", fontFamily: "'Space Mono',monospace" }}>
-                    <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "var(--accent)", boxShadow: "0 0 8px var(--accent)", animation: "camPulse 1.4s ease infinite", display: "inline-block" }} /> LIVE
+                <div style={{
+                    position: "absolute", top: "20px", left: "20px",
+                    display: "inline-flex", alignItems: "center", gap: "6px",
+                    padding: "6px 14px", borderRadius: "999px",
+                    background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)",
+                    border: "1px solid rgba(16,232,184,0.35)",
+                    fontSize: "11px", fontWeight: 700, letterSpacing: "0.1em",
+                    color: "var(--accent)", fontFamily: "'Space Mono',monospace"
+                }}>
+                    <span style={{
+                        width: "7px", height: "7px", borderRadius: "50%",
+                        background: "var(--accent)", boxShadow: "0 0 8px var(--accent)",
+                        animation: "camPulse 1.4s ease infinite", display: "inline-block"
+                    }} /> LIVE
                 </div>
             )}
+
             <button className="fs-exit-btn" onClick={() => setIsFullscreen(false)} title="Exit (ESC)">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
                 </svg>
             </button>
+
             <div className="fs-results">
+                {/* Sign */}
                 <div>
                     <div style={{ fontSize: "0.65rem", color: "rgba(232,244,255,0.4)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "4px", fontFamily: "'Space Mono',monospace" }}>Sign</div>
-                    <div key={letterKey} className="letter-pop" style={{ fontFamily: "'Space Mono',monospace", fontSize: "3rem", fontWeight: 800, color: "var(--accent)", textShadow: "0 0 24px rgba(16,232,184,0.5)", lineHeight: 1 }}>{predictedLetter}</div>
+                    <div key={letterKey} className="letter-pop" style={{ fontFamily: "'Space Mono',monospace", fontSize: "3rem", fontWeight: 800, color: "var(--accent)", textShadow: "0 0 24px rgba(16,232,184,0.5)", lineHeight: 1 }}>
+                        {predictedLetter}
+                    </div>
                 </div>
+
+                {/* Confidence + sentence */}
                 <div style={{ flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "8px" }}>
                         <span style={{ fontSize: "0.72rem", color: "rgba(232,244,255,0.4)", textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "'Space Mono',monospace" }}>Confidence</span>
                         <span style={{ color: confZone.color, fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: "0.85rem" }}>{displayConf}%</span>
-                        <span style={{ padding: "2px 8px", borderRadius: "999px", background: `${confZone.color}18`, border: `1px solid ${confZone.color}40`, fontSize: "0.68rem", fontWeight: 700, color: confZone.color }}>{confZone.label}</span>
+                        <span style={{ padding: "2px 8px", borderRadius: "999px", background: `${confZone.color}18`, border: `1px solid ${confZone.color}40`, fontSize: "0.68rem", fontWeight: 700, color: confZone.color }}>
+                            {confZone.label}
+                        </span>
                     </div>
                     <div style={{ height: "6px", borderRadius: "999px", background: "rgba(255,255,255,0.1)", overflow: "hidden", marginBottom: "10px" }}>
                         <div style={{ height: "100%", borderRadius: "999px", width: `${displayConf}%`, background: confZone.bar, transition: "width 0.08s linear" }} />
@@ -341,35 +417,49 @@ export default function Detect() {
                         {typedSentence || <span style={{ opacity: 0.35 }}>Sentence will appear here...</span>}
                     </div>
                 </div>
+
+                {/* Word */}
                 <div style={{ textAlign: "center" }}>
                     <div style={{ fontSize: "0.65rem", color: "rgba(232,244,255,0.4)", textTransform: "uppercase", letterSpacing: "0.07em", fontFamily: "'Space Mono',monospace", marginBottom: "4px" }}>Word</div>
-                    <div style={{ fontFamily: "'Space Mono',monospace", fontSize: "1.3rem", fontWeight: 700, color: "#e8f4ff" }}>{currentWord || "—"}</div>
+                    <div style={{ fontFamily: "'Space Mono',monospace", fontSize: "1.3rem", fontWeight: 700, color: "#e8f4ff" }}>
+                        {currentWord || "—"}
+                    </div>
                 </div>
+
+                {/* Controls */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                    <button className="cam-btn micro-btn" style={{ ...d.btnTeal, flex: "none", padding: "10px 18px", fontSize: "0.82rem" }} disabled={!cameraActive}
-                        onClick={isDetecting ? handleStopDetection : handleStartDetection}>
+                    <button
+                        className="cam-btn micro-btn"
+                        style={{ ...d.btnTeal, flex: "none", padding: "10px 18px", fontSize: "0.82rem" }}
+                        disabled={!cameraActive}
+                        onClick={isDetecting ? handleStopDetection : handleStartDetection}
+                    >
                         {isDetecting ? "Stop" : "Start"}
                     </button>
-                    <button className="cam-btn micro-btn" style={{ ...d.btnGhost, flex: "none", padding: "10px 18px", fontSize: "0.82rem" }} onClick={handleClear}>Clear</button>
+                    <button className="cam-btn micro-btn" style={{ ...d.btnGhost, flex: "none", padding: "10px 18px", fontSize: "0.82rem" }} onClick={handleClear}>
+                        Clear
+                    </button>
                 </div>
             </div>
         </div>
     ) : null;
 
-    // ── NORMAL VIEW ────────────────────────────────────────────
+    // ── Normal view ───────────────────────────────────────────
     return (
         <>
-            {/* Portal renders fullscreen DIRECTLY to body — above everything */}
             {fullscreenEl && ReactDOM.createPortal(fullscreenEl, document.body)}
 
             <main style={d.page}>
                 <style>{CSS}</style>
                 <canvas ref={canvasRef} style={{ display: "none" }} />
 
+                {/* Top bar */}
                 <div style={d.topBar}>
                     <div>
                         <button style={d.backBtn} onClick={() => navigate("/")}>
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                                <path d="M19 12H5M12 19l-7-7 7-7" />
+                            </svg>
                             Back to Home
                         </button>
                         <h1 style={d.pageTitle}>Detection Console</h1>
@@ -383,7 +473,7 @@ export default function Detect() {
                 {error && <div style={d.errorBar}>⚠ {error}</div>}
 
                 <div style={d.grid}>
-                    {/* Camera */}
+                    {/* ── Camera panel ── */}
                     <div style={d.camPanel}>
                         <div style={d.panelHead}>
                             <span style={d.panelLabel}>Webcam Feed</span>
@@ -399,8 +489,10 @@ export default function Detect() {
                                 <span style={{ ...d.camLed, background: cameraActive ? "var(--accent)" : "var(--text-faint)", boxShadow: cameraActive ? "0 0 10px var(--accent)" : "none" }} />
                             </div>
                         </div>
+
                         <div style={d.camBox}>
                             <video ref={videoRef} style={{ ...d.video, opacity: cameraActive ? 1 : 0 }} muted playsInline />
+
                             {!cameraActive && (
                                 <div style={d.camIdle}>
                                     <div style={d.camIconWrap}>
@@ -412,55 +504,84 @@ export default function Detect() {
                                     <p style={d.idleSub}>Click Start Camera below</p>
                                 </div>
                             )}
+
                             {isDetecting && cameraActive && (
                                 <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-                                    {[{ top: "14px", left: "14px", borderRight: "none", borderBottom: "none" }, { top: "14px", right: "14px", borderLeft: "none", borderBottom: "none" }, { bottom: "14px", left: "14px", borderRight: "none", borderTop: "none" }, { bottom: "14px", right: "14px", borderLeft: "none", borderTop: "none" }].map((st, i) => (
-                                        <div key={i} className="corner-anim" style={{ position: "absolute", width: "26px", height: "26px", border: "2px solid var(--accent)", opacity: 0.85, animationDelay: `${i * 0.06}s`, ...st }} />
+                                    {[
+                                        { top: "14px",    left:  "14px",  borderRight: "none", borderBottom: "none" },
+                                        { top: "14px",    right: "14px",  borderLeft:  "none", borderBottom: "none" },
+                                        { bottom: "14px", left:  "14px",  borderRight: "none", borderTop:    "none" },
+                                        { bottom: "14px", right: "14px",  borderLeft:  "none", borderTop:    "none" },
+                                    ].map((st, i) => (
+                                        <div key={i} className="corner-anim" style={{
+                                            position: "absolute", width: "26px", height: "26px",
+                                            border: "2px solid var(--accent)", opacity: 0.85,
+                                            animationDelay: `${i * 0.06}s`, ...st
+                                        }} />
                                     ))}
                                 </div>
                             )}
+
                             {isDetecting && <div style={d.scanline} />}
+
                             {isDetecting && (
                                 <div style={d.liveBadge}>
                                     <span style={{ ...d.dot, background: "var(--accent)", boxShadow: "0 0 8px var(--accent)", animation: "camPulse 1.4s ease infinite" }} /> LIVE
                                 </div>
                             )}
+
                             {isDetecting && predictedLetter !== "—" && (
                                 <div style={d.letterOverlay}>
                                     <span key={letterKey} className="letter-pop" style={d.letterOverlayText}>{predictedLetter}</span>
                                 </div>
                             )}
                         </div>
+
                         <div style={d.camFooter}>
                             {!cameraActive
                                 ? <button className="cam-btn micro-btn" style={d.btnTeal} onClick={startCamera}>
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M23 7l-7 5 7 5V7zM1 5h15a2 2 0 012 2v10a2 2 0 01-2 2H1a2 2 0 01-2-2V7a2 2 0 012-2z" /></svg>
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M23 7l-7 5 7 5V7zM1 5h15a2 2 0 012 2v10a2 2 0 01-2 2H1a2 2 0 01-2-2V7a2 2 0 012-2z" />
+                                    </svg>
                                     Start Camera
                                 </button>
                                 : <button className="cam-btn micro-btn" style={d.btnGhost} onClick={stopCamera}>
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                                    </svg>
                                     Stop Camera
                                 </button>
                             }
                         </div>
                     </div>
 
-                    {/* Right column */}
+                    {/* ── Right column ── */}
                     <div style={d.rightCol}>
+
+                        {/* Detected Sign */}
                         <div className="block-card glass-card" style={{ ...d.block, ...(isDetecting ? d.blockActive : {}) }}>
                             <div style={d.blockHead}>
                                 <span style={d.blockLabel}>Detected Sign</span>
-                                {isPredicting && <span style={d.spinnerWrap}><span style={d.spinnerDot} /> analyzing</span>}
+                                {isPredicting && (
+                                    <span style={d.spinnerWrap}>
+                                        <span style={d.spinnerDot} /> analyzing
+                                    </span>
+                                )}
                             </div>
                             <div key={letterKey} className="letter-pop" style={d.bigLetter}>{predictedLetter}</div>
                         </div>
 
+                        {/* Confidence */}
                         <div className="block-card glass-card" style={{ ...d.block, ...(isDetecting ? d.blockActive : {}) }}>
                             <div style={d.blockHead}>
                                 <span style={d.blockLabel}>Confidence</span>
                                 <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <span style={{ ...d.zoneTag, background: `${confZone.color}18`, color: confZone.color, border: `1px solid ${confZone.color}40` }}>{confZone.label}</span>
-                                    <span style={{ fontFamily: "'Space Mono',monospace", fontSize: "0.95rem", color: confZone.color, fontWeight: 700 }}>{displayConf}%</span>
+                                    <span style={{ ...d.zoneTag, background: `${confZone.color}18`, color: confZone.color, border: `1px solid ${confZone.color}40` }}>
+                                        {confZone.label}
+                                    </span>
+                                    <span style={{ fontFamily: "'Space Mono',monospace", fontSize: "0.95rem", color: confZone.color, fontWeight: 700 }}>
+                                        {displayConf}%
+                                    </span>
                                 </span>
                             </div>
                             <div style={d.barTrack}>
@@ -473,6 +594,7 @@ export default function Detect() {
                             </div>
                         </div>
 
+                        {/* Current Word */}
                         <div key={wordKey} className={`block-card glass-card${wordFlash ? " word-flash" : ""}`} style={{ ...d.block, ...(!wordFlash && isDetecting ? d.blockActive : {}) }}>
                             <span style={d.blockLabel}>Current Word</span>
                             <div key={wordKey} className={wordFlash ? "word-scale" : ""} style={d.wordDisplay}>
@@ -480,20 +602,23 @@ export default function Detect() {
                             </div>
                         </div>
 
+                        {/* Sentence */}
                         <div className="block-card glass-card" style={d.block}>
                             <div style={d.blockHead}>
                                 <span style={d.blockLabel}>Sentence</span>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <span style={{ fontSize: "0.72rem", color: "var(--text-faint)", fontFamily: "'Space Mono',monospace" }}>{sentence.length} words</span>
-                                    <button className="copy-btn cam-btn micro-btn" style={{ ...d.copyBtn }} onClick={handleCopySentence} title="Copy sentence">
+                                    <button className="copy-btn cam-btn micro-btn" style={d.copyBtn} onClick={handleCopySentence} title="Copy sentence">
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
                                         </svg>
                                         Copy
                                     </button>
-                                    <button className="copy-btn cam-btn micro-btn" style={{ ...d.copyBtn }} onClick={handleSpeak} title="Read sentence aloud">
+                                    <button className="copy-btn cam-btn micro-btn" style={d.copyBtn} onClick={handleSpeak} title="Read sentence aloud">
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M15.54 8.46a5 5 0 010 7.07" /><path d="M19.07 4.93a10 10 0 010 14.14" />
+                                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                                            <path d="M15.54 8.46a5 5 0 010 7.07" />
+                                            <path d="M19.07 4.93a10 10 0 010 14.14" />
                                         </svg>
                                         Speak
                                     </button>
@@ -504,27 +629,44 @@ export default function Detect() {
                             </div>
                         </div>
 
+                        {/* Control row */}
                         <div style={d.controlRow}>
-                            <button className="cam-btn micro-btn" style={isDetecting ? d.btnRed : d.btnTeal} disabled={!cameraActive}
-                                onClick={isDetecting ? handleStopDetection : handleStartDetection}>
+                            <button
+                                className="cam-btn micro-btn"
+                                style={isDetecting ? d.btnRed : d.btnTeal}
+                                disabled={!cameraActive}
+                                onClick={isDetecting ? handleStopDetection : handleStartDetection}
+                            >
                                 {isDetecting
                                     ? <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" /></svg> Stop Detection</>
                                     : <><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg> Start Detection</>
                                 }
                             </button>
                             <button className="cam-btn micro-btn" style={d.btnGhost} onClick={handleClear}>
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.51" /></svg>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.51" />
+                                </svg>
                                 Clear
                             </button>
                         </div>
 
+                        {/* Model info */}
                         <div style={d.modelCard}>
                             <div style={d.modelTitle}>
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></svg>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2">
+                                    <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
+                                </svg>
                                 Model Info
                             </div>
                             <div style={d.modelGrid}>
-                                {[["Architecture", "GRU (Keras)"], ["Input Shape", "30 × 63"], ["Landmarks", "21 × 3D (x,y,z)"], ["Accuracy", "85 – 95%"], ["Framework", "TensorFlow"], ["Backbone", "MediaPipe"]].map(([k, v]) => (
+                                {[
+                                    ["Architecture", "GRU (Keras)"],
+                                    ["Input Shape",  "30 × 63"],
+                                    ["Landmarks",    "21 × 3D (x,y,z)"],
+                                    ["Accuracy",     "85 – 95%"],
+                                    ["Framework",    "TensorFlow"],
+                                    ["Backbone",     "MediaPipe"],
+                                ].map(([k, v]) => (
                                     <div key={k} style={d.modelRow}>
                                         <span style={d.modelKey}>{k}</span>
                                         <span style={d.modelVal}>{v}</span>
@@ -532,61 +674,63 @@ export default function Detect() {
                                 ))}
                             </div>
                         </div>
-                    </div>
-                </div>
+
+                    </div>{/* end rightCol */}
+                </div>{/* end grid */}
             </main>
         </>
     );
 }
 
+// ── Styles ────────────────────────────────────────────────────
 const d = {
-    page: { position: "relative", zIndex: 1, maxWidth: "1300px", margin: "0 auto", padding: "0 24px 60px", fontFamily: "'Plus Jakarta Sans',system-ui,sans-serif", color: "var(--text)" },
-    topBar: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px", paddingBottom: "28px" },
-    backBtn: { display: "inline-flex", alignItems: "center", gap: "7px", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "0.85rem", padding: 0, fontFamily: "inherit", marginBottom: "8px" },
-    pageTitle: { margin: 0, fontSize: "clamp(1.5rem,3vw,2.3rem)", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" },
-    statusPill: { display: "inline-flex", alignItems: "center", gap: "7px", padding: "9px 16px", borderRadius: "999px", background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: "0.82rem", fontWeight: 600, fontFamily: "'Space Mono',monospace", letterSpacing: "0.04em" },
-    dot: { width: "7px", height: "7px", borderRadius: "50%", flexShrink: 0 },
-    errorBar: { padding: "12px 18px", borderRadius: "12px", marginBottom: "18px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5", fontSize: "0.88rem" },
-    grid: { display: "grid", gridTemplateColumns: "1.45fr 1fr", gap: "20px", alignItems: "start" },
-    camPanel: { borderRadius: "22px", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--border)" },
-    panelHead: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid var(--border-sub)" },
-    panelLabel: { fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" },
-    camLed: { width: "9px", height: "9px", borderRadius: "50%", transition: "all 0.4s ease" },
-    fsBtn: { display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "9px", border: "1px solid var(--accent-border)", background: "var(--accent-dim)", color: "var(--accent)", fontWeight: 600, fontSize: "0.75rem", fontFamily: "inherit" },
-    camBox: { position: "relative", background: "#020508", minHeight: "460px", overflow: "hidden" },
-    video: { width: "100%", height: "460px", objectFit: "cover", display: "block", transition: "opacity 0.4s ease", transform: "scaleX(-1)" },
-    camIdle: { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px" },
+    page:        { position: "relative", zIndex: 1, maxWidth: "1300px", margin: "0 auto", padding: "0 24px 60px", fontFamily: "'Plus Jakarta Sans',system-ui,sans-serif", color: "var(--text)" },
+    topBar:      { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px", paddingBottom: "28px" },
+    backBtn:     { display: "inline-flex", alignItems: "center", gap: "7px", background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "0.85rem", padding: 0, fontFamily: "inherit", marginBottom: "8px" },
+    pageTitle:   { margin: 0, fontSize: "clamp(1.5rem,3vw,2.3rem)", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--text)" },
+    statusPill:  { display: "inline-flex", alignItems: "center", gap: "7px", padding: "9px 16px", borderRadius: "999px", background: "var(--surface-2)", border: "1px solid var(--border)", fontSize: "0.82rem", fontWeight: 600, fontFamily: "'Space Mono',monospace", letterSpacing: "0.04em" },
+    dot:         { width: "7px", height: "7px", borderRadius: "50%", flexShrink: 0 },
+    errorBar:    { padding: "12px 18px", borderRadius: "12px", marginBottom: "18px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5", fontSize: "0.88rem" },
+    grid:        { display: "grid", gridTemplateColumns: "1.45fr 1fr", gap: "20px", alignItems: "start" },
+    camPanel:    { borderRadius: "22px", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--border)" },
+    panelHead:   { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: "1px solid var(--border-sub)" },
+    panelLabel:  { fontSize: "0.78rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" },
+    camLed:      { width: "9px", height: "9px", borderRadius: "50%", transition: "all 0.4s ease" },
+    fsBtn:       { display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "9px", border: "1px solid var(--accent-border)", background: "var(--accent-dim)", color: "var(--accent)", fontWeight: 600, fontSize: "0.75rem", fontFamily: "inherit" },
+    camBox:      { position: "relative", background: "#020508", minHeight: "460px", overflow: "hidden" },
+    video:       { width: "100%", height: "460px", objectFit: "cover", display: "block", transition: "opacity 0.4s ease", transform: "scaleX(-1)" },
+    camIdle:     { position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "8px" },
     camIconWrap: { width: "88px", height: "88px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--accent-dim)", border: "1px solid var(--accent-border)", marginBottom: "8px" },
-    idleText: { margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--text-muted)" },
-    idleSub: { margin: 0, fontSize: "0.82rem", color: "var(--text-faint)" },
-    scanline: { position: "absolute", left: 0, right: 0, height: "2px", background: "linear-gradient(90deg,transparent,rgba(16,232,184,0.5),transparent)", animation: "scanline 2.8s ease-in-out infinite", pointerEvents: "none" },
-    liveBadge: { position: "absolute", top: "13px", left: "13px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 12px", borderRadius: "999px", background: "rgba(0,0,0,0.65)", backdropFilter: "blur(8px)", border: "1px solid var(--accent-border)", fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em", color: "var(--accent)", fontFamily: "'Space Mono',monospace" },
-    letterOverlay: { position: "absolute", bottom: "18px", right: "18px", padding: "10px 16px", borderRadius: "12px", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", border: "1px solid var(--accent-border)" },
+    idleText:    { margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "var(--text-muted)" },
+    idleSub:     { margin: 0, fontSize: "0.82rem", color: "var(--text-faint)" },
+    scanline:    { position: "absolute", left: 0, right: 0, height: "2px", background: "linear-gradient(90deg,transparent,rgba(16,232,184,0.5),transparent)", animation: "scanline 2.8s ease-in-out infinite", pointerEvents: "none" },
+    liveBadge:   { position: "absolute", top: "13px", left: "13px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "5px 12px", borderRadius: "999px", background: "rgba(0,0,0,0.65)", backdropFilter: "blur(8px)", border: "1px solid var(--accent-border)", fontSize: "10px", fontWeight: 700, letterSpacing: "0.1em", color: "var(--accent)", fontFamily: "'Space Mono',monospace" },
+    letterOverlay:     { position: "absolute", bottom: "18px", right: "18px", padding: "10px 16px", borderRadius: "12px", background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)", border: "1px solid var(--accent-border)" },
     letterOverlayText: { fontFamily: "'Space Mono',monospace", fontSize: "2rem", fontWeight: 700, color: "var(--accent)", textShadow: "0 0 20px var(--accent-dim)" },
-    camFooter: { display: "flex", gap: "12px", padding: "14px 18px", borderTop: "1px solid var(--border-sub)" },
-    rightCol: { display: "flex", flexDirection: "column", gap: "12px" },
-    block: { padding: "16px 18px", borderRadius: "16px", background: "var(--surface)", border: "1px solid var(--border)" },
+    camFooter:   { display: "flex", gap: "12px", padding: "14px 18px", borderTop: "1px solid var(--border-sub)" },
+    rightCol:    { display: "flex", flexDirection: "column", gap: "12px" },
+    block:       { padding: "16px 18px", borderRadius: "16px", background: "var(--surface)", border: "1px solid var(--border)" },
     blockActive: { borderColor: "var(--accent-border)", boxShadow: "0 0 24px var(--accent-dim)" },
-    blockHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" },
-    blockLabel: { fontSize: "0.75rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" },
-    bigLetter: { fontSize: "4rem", fontWeight: 800, lineHeight: 1, fontFamily: "'Space Mono',monospace", color: "var(--accent)", textShadow: "0 0 28px var(--accent-dim)" },
+    blockHead:   { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" },
+    blockLabel:  { fontSize: "0.75rem", fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em" },
+    bigLetter:   { fontSize: "4rem", fontWeight: 800, lineHeight: 1, fontFamily: "'Space Mono',monospace", color: "var(--accent)", textShadow: "0 0 28px var(--accent-dim)" },
     wordDisplay: { fontSize: "1.55rem", fontWeight: 700, fontFamily: "'Space Mono',monospace", color: "var(--text)", marginTop: "4px", minHeight: "2rem" },
-    barTrack: { height: "8px", borderRadius: "999px", background: "var(--surface-2)", overflow: "hidden", marginBottom: "8px" },
-    barFill: { height: "100%", borderRadius: "999px", transition: "width 0.08s linear, background 0.45s ease", minWidth: "4px" },
-    barZones: { display: "flex", justifyContent: "space-between", fontSize: "0.7rem", opacity: 0.55 },
-    zoneTag: { padding: "3px 9px", borderRadius: "999px", fontSize: "0.72rem", fontWeight: 700, fontFamily: "'Space Mono',monospace", letterSpacing: "0.04em" },
+    barTrack:    { height: "8px", borderRadius: "999px", background: "var(--surface-2)", overflow: "hidden", marginBottom: "8px" },
+    barFill:     { height: "100%", borderRadius: "999px", transition: "width 0.08s linear, background 0.45s ease", minWidth: "4px" },
+    barZones:    { display: "flex", justifyContent: "space-between", fontSize: "0.7rem", opacity: 0.55 },
+    zoneTag:     { padding: "3px 9px", borderRadius: "999px", fontSize: "0.72rem", fontWeight: 700, fontFamily: "'Space Mono',monospace", letterSpacing: "0.04em" },
     sentenceBox: { minHeight: "64px", maxHeight: "110px", overflowY: "auto", marginTop: "6px", fontSize: "0.95rem", lineHeight: 1.75, color: "var(--text)", fontFamily: "'Space Mono',monospace", wordBreak: "break-word" },
-    copyBtn: { display: "inline-flex", alignItems: "center", gap: "5px", padding: "5px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text-muted)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "inherit" },
+    copyBtn:     { display: "inline-flex", alignItems: "center", gap: "5px", padding: "5px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text-muted)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "inherit" },
     spinnerWrap: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "0.75rem", color: "var(--accent)", fontFamily: "'Space Mono',monospace" },
-    spinnerDot: { display: "inline-block", width: "11px", height: "11px", borderRadius: "50%", border: "2px solid var(--accent-dim)", borderTopColor: "var(--accent)", animation: "spinDot 0.7s linear infinite" },
-    btnTeal: { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,var(--accent),#0abf97)", color: "var(--accent-btn-text)", fontWeight: 700, fontSize: "0.88rem", fontFamily: "inherit", boxShadow: "0 6px 20px var(--accent-dim)" },
-    btnRed: { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,#ef4444,#dc2626)", color: "#fff", fontWeight: 700, fontSize: "0.88rem", fontFamily: "inherit", boxShadow: "0 6px 20px rgba(239,68,68,0.2)" },
-    btnGhost: { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text-muted)", fontWeight: 600, fontSize: "0.88rem", fontFamily: "inherit" },
-    controlRow: { display: "flex", gap: "10px" },
-    modelCard: { padding: "16px 18px", borderRadius: "16px", background: "var(--accent-dim)", border: "1px solid var(--accent-border)" },
-    modelTitle: { display: "flex", alignItems: "center", gap: "7px", fontSize: "0.78rem", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "12px" },
-    modelGrid: { display: "flex", flexDirection: "column", gap: "6px" },
-    modelRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid var(--border-sub)" },
-    modelKey: { fontSize: "0.78rem", color: "var(--text-muted)" },
-    modelVal: { fontSize: "0.78rem", fontWeight: 600, color: "var(--text)", fontFamily: "'Space Mono',monospace" },
+    spinnerDot:  { display: "inline-block", width: "11px", height: "11px", borderRadius: "50%", border: "2px solid var(--accent-dim)", borderTopColor: "var(--accent)", animation: "spinDot 0.7s linear infinite" },
+    btnTeal:     { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,var(--accent),#0abf97)", color: "var(--accent-btn-text)", fontWeight: 700, fontSize: "0.88rem", fontFamily: "inherit", boxShadow: "0 6px 20px var(--accent-dim)" },
+    btnRed:      { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "none", background: "linear-gradient(135deg,#ef4444,#dc2626)", color: "#fff", fontWeight: 700, fontSize: "0.88rem", fontFamily: "inherit", boxShadow: "0 6px 20px rgba(239,68,68,0.2)" },
+    btnGhost:    { flex: 1, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px", padding: "11px 18px", borderRadius: "12px", border: "1px solid var(--border)", background: "var(--surface-2)", color: "var(--text-muted)", fontWeight: 600, fontSize: "0.88rem", fontFamily: "inherit" },
+    controlRow:  { display: "flex", gap: "10px" },
+    modelCard:   { padding: "16px 18px", borderRadius: "16px", background: "var(--accent-dim)", border: "1px solid var(--accent-border)" },
+    modelTitle:  { display: "flex", alignItems: "center", gap: "7px", fontSize: "0.78rem", fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: "12px" },
+    modelGrid:   { display: "flex", flexDirection: "column", gap: "6px" },
+    modelRow:    { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid var(--border-sub)" },
+    modelKey:    { fontSize: "0.78rem", color: "var(--text-muted)" },
+    modelVal:    { fontSize: "0.78rem", fontWeight: 600, color: "var(--text)", fontFamily: "'Space Mono',monospace" },
 };
