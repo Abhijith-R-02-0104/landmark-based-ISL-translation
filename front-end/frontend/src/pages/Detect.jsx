@@ -1,3 +1,4 @@
+
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import ReactDOM from "react-dom";
@@ -92,6 +93,9 @@ export default function Detect() {
     const confCurRef    = useRef(0);
     const prevSentRef   = useRef("");
     const prevWordRef   = useRef("");
+    const lastConfirmedRef = useRef(null);
+    const lastConfirmedTimeRef = useRef(0);
+    const predictionBufferRef = useRef([]);
 
     const [cameraActive,    setCameraActive]    = useState(false);
     const [isDetecting,     setIsDetecting]     = useState(false);
@@ -157,41 +161,59 @@ export default function Detect() {
     // FIX 2: `isPredicting` added to deps so the guard always sees current value.
     // FIX 3: Interval at 100 ms (was 600 ms) for responsive real-time detection.
     useEffect(() => {
-        let interval = null;
-        if (isDetecting) {
-            interval = setInterval(async () => {
-                // ✅ Skip this tick entirely if a prediction is already in-flight
-                if (isPredicting) return;
+    let interval = null;
+    if (isDetecting) {
+        interval = setInterval(async () => {
 
-                const frame = captureFrame();
-                if (!frame) return;
+            if (isPredicting) return;
 
-                setIsPredicting(true);
-                const result = await predictFrame(frame);
-                setIsPredicting(false);
+            const frame = captureFrame();
+            if (!frame) return;
 
-                if (result) {
-                    const letter = result.letter || "—";
-                    setPredictedLetter(prev => {
-                        if (prev !== letter) setLetterKey(k => k + 1);
-                        return letter;
-                    });
-                    setConfidence(result.confidence || 0);
-                    setCurrentWord(result.current_word || "");
+            setIsPredicting(true);
+            const result = await predictFrame(frame);
+            setIsPredicting(false);
 
-                    if (result.current_word) {
-                        setSentence(prev => {
-                            const last = prev[prev.length - 1];
-                            return last !== result.current_word
-                                ? [...prev, result.current_word]
-                                : prev;
-                        });
-                    }
-                }
-            }, 100); // ✅ 100 ms — matches Doc 2
+            if (result) {
+
+    // 🔹 RAW DISPLAY
+    const letter = result.letter || "—";
+    setPredictedLetter(prev => {
+        if (prev !== letter) setLetterKey(k => k + 1);
+        return letter;
+    });
+
+    const conf = result.confidence || 0;
+    setConfidence(conf);
+
+    // 🔥 LIVE CURRENT WORD
+    if (result.letter && result.letter !== "-") {
+        setCurrentWord(result.letter);
+    }
+
+    // 🔥 FIXED: use gesture instead of current_word
+    const confirmed = result.gesture;
+
+    if (confirmed && typeof confirmed === "string" && confirmed !== "undefined") {
+
+        const clean = confirmed.trim();
+
+        if (clean.length > 0) {
+            setSentence(prev => {
+                const last = prev[prev.length - 1];
+                return last !== clean
+                    ? [...prev, clean]
+                    : prev;
+            });
         }
-        return () => { if (interval) clearInterval(interval); };
-    }, [isDetecting, isPredicting, captureFrame]); // ✅ isPredicting in deps
+    }
+}
+
+        }, 100);
+    }
+    return () => { if (interval) clearInterval(interval); };
+}, [isDetecting, isPredicting, captureFrame]);
+
 
     // ── Smooth Confidence ─────────────────────────────────────
     const confPct = Math.round(confidence > 1 ? confidence : confidence * 100);
@@ -223,17 +245,15 @@ export default function Detect() {
 
     // ── Typewriter ────────────────────────────────────────────
     useEffect(() => {
-        const full = sentence.join(" ");
-        if (full === prevSentRef.current) return;
-        const newPart = full.slice(prevSentRef.current.length);
-        prevSentRef.current = full;
-        if (typingRef.current) clearInterval(typingRef.current);
-        let i = 0;
-        typingRef.current = setInterval(() => {
-            if (i < newPart.length) { setTypedSentence(p => p + newPart[i]); i++; }
-            else clearInterval(typingRef.current);
-        }, 42);
-        return () => clearInterval(typingRef.current);
+        const cleanSentence = sentence
+            .filter(word => typeof word === "string" && word !== "undefined")
+            .join(" ");
+
+     // ✅ only update if actually changed
+        setTypedSentence(prev => {
+            return prev !== cleanSentence ? cleanSentence : prev;
+        });
+
     }, [sentence]);
 
     // ── Re-attach stream when toggling fullscreen ─────────────
@@ -261,12 +281,26 @@ export default function Detect() {
         toast.warning("Detection has stopped", { title: "Detection Stopped" });
     };
     const handleClear = () => {
-        setPredictedLetter("—"); setConfidence(0); setDisplayConf(0);
-        confCurRef.current = 0;
-        setCurrentWord(""); setSentence([]); setTypedSentence("");
-        prevSentRef.current = ""; prevWordRef.current = "";
-        toast.info("All results cleared");
-    };
+    setPredictedLetter("—"); 
+    setConfidence(0); 
+    setDisplayConf(0);
+
+    confCurRef.current = 0;
+
+    setCurrentWord(""); 
+    setSentence([]); 
+    setTypedSentence("");
+
+    prevSentRef.current = ""; 
+    prevWordRef.current = "";
+
+    // 🔥 RESET LOGIC STATE
+    lastConfirmedRef.current = null;
+    lastConfirmedTimeRef.current = 0;
+    predictionBufferRef.current = [];
+
+    toast.info("All results cleared");
+};
     const handleCopySentence = () => {
         if (!typedSentence) { toast.warning("No sentence to copy yet"); return; }
         navigator.clipboard.writeText(typedSentence)
