@@ -14,6 +14,8 @@ backend/model/*.npy
 # ================= FRONTEND =================
 node_modules/
 dist/
+front-end/frontend/node_modules/
+.vite/
 
 # ================= ENV FILES =================
 .env
