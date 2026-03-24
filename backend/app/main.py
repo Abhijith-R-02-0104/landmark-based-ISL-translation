@@ -44,13 +44,11 @@ hands = mp_hands.Hands(
 
 # ================= PARAMS =================
 SEQUENCE_LENGTH = 30
-CONFIDENCE_THRESHOLD = 0.3   # lowered for smoother detection
-PREDICTION_WINDOW = 10
 
 
 # ================= STATE =================
 sequence = deque(maxlen=SEQUENCE_LENGTH)
-predictions = deque(maxlen=PREDICTION_WINDOW)
+predictions = deque(maxlen=5)
 sentence = []
 
 
@@ -115,15 +113,14 @@ async def predict(data: FrameData):
 
         gesture_output = None
 
-        # ===== Confirmation Logic =====
-        if confidence > CONFIDENCE_THRESHOLD:
+        # ===== STRICT CONFIRMATION =====
+        if confidence > 0.7:
 
             predictions.append(predicted_class)
 
-            if len(predictions) >= 5 and len(set(list(predictions)[-5:])) == 1:
+            if len(predictions) == 5 and len(set(predictions)) == 1:
 
                 final_prediction = predictions[0]
-
                 gesture_output = final_prediction
 
                 # avoid duplicates
@@ -135,7 +132,6 @@ async def predict(data: FrameData):
 
                 print(f"✅ CONFIRMED: {final_prediction}")
 
-        # ===== FINAL RETURN =====
         return {
             "letter": predicted_class,
             "confidence": confidence,
@@ -143,4 +139,4 @@ async def predict(data: FrameData):
         }
 
     # ===== Not enough frames yet =====
-    return {"letter": "-", "confidence": 0.0, "gesture": None}
+    return {"letter": "-", "confidence": 0.0, "gesture": N }
