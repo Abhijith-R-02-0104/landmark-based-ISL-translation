@@ -1,48 +1,115 @@
-# ================= ADD THIS after your imports =================
-from tensorflow.keras.layers import GRU, Dense, Dropout, Bidirectional
+# ================= IMPORTS =================
+import os
+import numpy as np
 import random
 
-# ================= ADD augmentation function before the MODEL section =================
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import GRU, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+
+# ================= SETTINGS =================
+SEQUENCE_LENGTH = 30
+
+# 🔥 CORRECT DATA PATH
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_PATH = os.path.join(BASE_DIR, "../data/raw/Abhi")
+
+print("Using dataset path:", DATASET_PATH)
+
+# ================= LOAD DATA =================
+X, y = [], []
+
+class_names = sorted(os.listdir(DATASET_PATH))
+print("CLASS ORDER:", class_names)
+
+for label in class_names:
+    label_path = os.path.join(DATASET_PATH, label)
+
+    if not os.path.isdir(label_path):
+        continue
+
+    for file in os.listdir(label_path):
+        file_path = os.path.join(label_path, file)
+
+        try:
+            seq = np.load(file_path)
+
+            # 🔥 FIX: convert (30, 21, 3) → (30, 63)
+            if len(seq.shape) == 3 and seq.shape[1] == 21 and seq.shape[2] == 3:
+                seq = seq.reshape(SEQUENCE_LENGTH, 63)
+
+            # ✅ Accept valid format
+            if len(seq.shape) == 2 and seq.shape[1] == 63:
+
+                # Fix sequence length
+                if seq.shape[0] < SEQUENCE_LENGTH:
+                    seq = np.pad(seq, ((0, SEQUENCE_LENGTH - seq.shape[0]), (0, 0)), mode='edge')
+                else:
+                    seq = seq[:SEQUENCE_LENGTH]
+
+                X.append(seq)
+                y.append(label)
+
+        except:
+            continue
+
+X = np.array(X)
+y = np.array(y)
+
+print("Loaded data:", X.shape, y.shape)
+
+# ================= LABEL ENCODING =================
+le = LabelEncoder()
+y = le.fit_transform(y)
+
+# 🔥 SAVE LABEL ORDER
+class_names = list(le.classes_)
+np.save(os.path.join(BASE_DIR, "labels.npy"), class_names)
+print("Saved labels:", class_names)
+
+# ================= AUGMENTATION =================
 def augment_sequence(seq):
-    """
-    Jitter + time-warp to make model robust to recording variation.
-    seq shape: (30, 63)
-    """
-    # Gaussian noise — simulates MediaPipe landmark jitter
     seq = seq + np.random.normal(0, 0.008, seq.shape)
-    # Random time-scaling (speed up or slow down by ±15%)
+
     if random.random() > 0.5:
-        scale   = np.random.uniform(0.85, 1.15)
-        new_len = int(30 * scale)
-        idx     = np.linspace(0, 29, new_len).astype(int)
-        seq     = seq[idx]
-        if len(seq) < 30:
-            seq = np.pad(seq, ((0, 30 - len(seq)), (0, 0)), mode='edge')
+        scale = np.random.uniform(0.85, 1.15)
+        new_len = int(SEQUENCE_LENGTH * scale)
+        idx = np.linspace(0, SEQUENCE_LENGTH - 1, new_len).astype(int)
+        seq = seq[idx]
+
+        if len(seq) < SEQUENCE_LENGTH:
+            seq = np.pad(seq, ((0, SEQUENCE_LENGTH - len(seq)), (0, 0)), mode='edge')
         else:
-            seq = seq[:30]
+            seq = seq[:SEQUENCE_LENGTH]
+
     return seq.astype(np.float32)
 
-# ================= AFTER loading X, add augmented copies =================
-# Add this right after your "X = np.array(X)" line:
+# ================= AUGMENT DATA =================
 X_aug, y_aug = [], []
+
 for seq, label in zip(X, y):
     X_aug.append(seq)
     y_aug.append(label)
-    # Add 2 augmented copies per sample — triples your effective dataset
+
     for _ in range(2):
         X_aug.append(augment_sequence(seq.copy()))
         y_aug.append(label)
 
 X = np.array(X_aug)
 y = np.array(y_aug)
-print(f"After augmentation: {X.shape}")  # should be ~3x original
 
-# ================= REPLACE your model definition with this =================
+print("After augmentation:", X.shape)
+
+# ================= TRAIN TEST SPLIT =================
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# ================= MODEL =================
 model = Sequential([
-    # Bidirectional: reads sequence forward AND backward
-    # The end of a gesture is often the most distinctive part —
-    # a unidirectional GRU has already half-forgotten it by then
-    Bidirectional(GRU(128, return_sequences=True), input_shape=(30, 63)),
+    Bidirectional(GRU(128, return_sequences=True), input_shape=(SEQUENCE_LENGTH, 63)),
     Dropout(0.3),
 
     Bidirectional(GRU(64, return_sequences=False)),
@@ -50,21 +117,33 @@ model = Sequential([
 
     Dense(64, activation='relu'),
     Dropout(0.2),
+
     Dense(len(le.classes_), activation='softmax')
 ])
 
-# ================= CHANGE early stopping patience =================
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+# ================= EARLY STOPPING =================
 early_stop = EarlyStopping(
-    monitor='val_accuracy',  # changed from val_loss — more intuitive for classification
-    patience=8,              # was 5 — too aggressive for small datasets
+    monitor='val_accuracy',
+    patience=8,
     restore_best_weights=True
 )
 
-# ================= CHANGE epochs =================
+# ================= TRAIN =================
 history = model.fit(
     X_train, y_train,
-    epochs=60,        # was 25 — too few with early stopping safety net
-    batch_size=16,    # was 8 — 8 is too small, causes noisy gradient updates
+    epochs=60,
+    batch_size=16,
     validation_data=(X_test, y_test),
     callbacks=[early_stop]
 )
+
+# ================= SAVE MODEL =================
+model.save(os.path.join(BASE_DIR, "model.h5"))
+
+print("✅ Training complete & labels saved!")

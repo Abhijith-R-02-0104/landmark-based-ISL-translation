@@ -26,3 +26,4 @@ node_modules/
 front-end/node_modules/
 landmark-based-ISL-translation/
 venv/
+labels.npy

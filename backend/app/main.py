@@ -106,8 +106,13 @@ async def predict(data: FrameData):
 
         prediction = model.predict(input_data, verbose=0)
 
-        predicted_class = str(labels[np.argmax(prediction)])
+        pred_index = np.argmax(prediction)
+        predicted_class = str(labels[pred_index])
         confidence = float(np.max(prediction))
+
+        print("INDEX:", pred_index)
+        print("LABEL FROM FILE:", labels[pred_index])
+        print("ALL LABELS:", labels)
 
         print(f"PRED: {predicted_class} | CONF: {confidence:.2f}")
 
@@ -139,4 +144,4 @@ async def predict(data: FrameData):
         }
 
     # ===== Not enough frames yet =====
-    return {"letter": "-", "confidence": 0.0, "gesture": N }
+    return {"letter": "-", "confidence": 0.0, "gesture": None}
