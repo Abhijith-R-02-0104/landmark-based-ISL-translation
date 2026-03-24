@@ -1,16 +1,29 @@
-# Virtual Environment
+# ================= VIRTUAL ENV =================
 venv/
 
-# Python cache
+# ================= PYTHON =================
 __pycache__/
 *.pyc
 
-# Dataset (ignore entire backend data folder)
-backend/data/
 
-# Trained models
+
+# ================= MODEL FILES =================
 backend/model/*.h5
+backend/model/*.npy
 
-# OS junk
+# ================= FRONTEND =================
+node_modules/
+dist/
+
+# ================= ENV FILES =================
+.env
+
+# ================= OS FILES =================
 .DS_Store
 Thumbs.db
+
+node_modules/
+front-end/node_modules/
+landmark-based-ISL-translation/
+venv/
+labels.npy

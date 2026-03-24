@@ -7,25 +7,30 @@ import numpy as np
 import base64
 from tensorflow.keras.models import load_model
 import os
+from collections import deque
 
-# ================= INIT APP =================
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
+
+@app.get("/status")
+def status():
+    return {"status": "ok"}
+
 
 # ================= LOAD MODEL =================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "model", "model.h5")
+MODEL_PATH  = os.path.join(BASE_DIR, "model", "model.h5")
 LABELS_PATH = os.path.join(BASE_DIR, "model", "labels.npy")
 
-model = load_model(MODEL_PATH, compile=False)
+model  = load_model(MODEL_PATH)
 labels = np.load(LABELS_PATH)
+
 
 # ================= MEDIAPIPE =================
 mp_hands = mp.solutions.hands
@@ -36,18 +41,17 @@ hands = mp_hands.Hands(
     min_tracking_confidence=0.7
 )
 
-# ================= PARAMETERS =================
+
+# ================= PARAMS =================
 SEQUENCE_LENGTH = 30
-CONFIRM_THRESHOLD = 3
-CONFIDENCE_THRESHOLD = 0.80
+
 
 # ================= STATE =================
-sequence = []
-last_prediction = None
-confirm_count = 0
+sequence = deque(maxlen=SEQUENCE_LENGTH)
+predictions = deque(maxlen=5)
 sentence = []
 
-# ================= REQUEST MODEL =================
+
 class FrameData(BaseModel):
     image: str
 
@@ -55,43 +59,45 @@ class FrameData(BaseModel):
 @app.post("/predict")
 async def predict(data: FrameData):
 
-    global sequence, last_prediction, confirm_count, sentence
+    # ===== Decode frame =====
+    try:
+        image_data = data.image.split(",")[1]
+        decoded    = base64.b64decode(image_data)
+        np_arr     = np.frombuffer(decoded, np.uint8)
+        frame      = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError
+    except Exception:
+        return {"letter": "-", "confidence": 0.0, "gesture": None}
 
-    # ===== Decode Image =====
-    image_data = data.image.split(",")[1]
-    decoded = base64.b64decode(image_data)
-
-    np_arr = np.frombuffer(decoded, np.uint8)
-    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
+    frame = cv2.resize(frame, (640, 480))
     frame = cv2.flip(frame, 1)
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     # ===== MediaPipe =====
     results = hands.process(rgb)
 
-    if results.multi_hand_landmarks:
+    if not results.multi_hand_landmarks:
+        sequence.clear()
+        predictions.clear()
+        return {"letter": "-", "confidence": 0.0, "gesture": None}
 
-        for hand_landmarks in results.multi_hand_landmarks:
+    # ===== Extract landmarks =====
+    for hand_landmarks in results.multi_hand_landmarks:
 
-            # wrist normalization
-            wrist = hand_landmarks.landmark[0]
-            wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
+        wrist = hand_landmarks.landmark[0]
+        wx, wy, wz = wrist.x, wrist.y, wrist.z
 
-            landmarks = []
+        landmarks = []
 
-            for lm in hand_landmarks.landmark:
-                landmarks.extend([
-                    lm.x - wrist_x,
-                    lm.y - wrist_y,
-                    lm.z - wrist_z
-                ])
+        for lm in hand_landmarks.landmark:
+            landmarks.extend([
+                lm.x - wx,
+                lm.y - wy,
+                lm.z - wz
+            ])
 
-            sequence.append(landmarks)
-
-            # sliding window
-            if len(sequence) > SEQUENCE_LENGTH:
-                sequence = sequence[-SEQUENCE_LENGTH:]
+        sequence.append(landmarks)
 
     # ===== Prediction =====
     if len(sequence) == SEQUENCE_LENGTH:
@@ -100,30 +106,42 @@ async def predict(data: FrameData):
 
         prediction = model.predict(input_data, verbose=0)
 
-        predicted_class = labels[np.argmax(prediction)]
+        pred_index = np.argmax(prediction)
+        predicted_class = str(labels[pred_index])
         confidence = float(np.max(prediction))
 
-        if confidence > CONFIDENCE_THRESHOLD:
+        print("INDEX:", pred_index)
+        print("LABEL FROM FILE:", labels[pred_index])
+        print("ALL LABELS:", labels)
 
-            if predicted_class == last_prediction:
-                confirm_count += 1
-            else:
-                confirm_count = 1
-                last_prediction = predicted_class
+        print(f"PRED: {predicted_class} | CONF: {confidence:.2f}")
 
-            if confirm_count >= CONFIRM_THRESHOLD:
+        gesture_output = None
 
-                if len(sentence) == 0 or sentence[-1] != predicted_class:
-                    sentence.append(predicted_class)
+        # ===== STRICT CONFIRMATION =====
+        if confidence > 0.7:
+
+            predictions.append(predicted_class)
+
+            if len(predictions) == 5 and len(set(predictions)) == 1:
+
+                final_prediction = predictions[0]
+                gesture_output = final_prediction
+
+                # avoid duplicates
+                if len(sentence) == 0 or sentence[-1] != final_prediction:
+                    sentence.append(final_prediction)
+
+                predictions.clear()
+                sequence.clear()
+
+                print(f"✅ CONFIRMED: {final_prediction}")
 
         return {
             "letter": predicted_class,
             "confidence": confidence,
-            "current_word": " ".join(sentence)
+            "gesture": gesture_output
         }
 
-    return {
-        "letter": "-",
-        "confidence": 0.0,
-        "current_word": " ".join(sentence)
-    }
+    # ===== Not enough frames yet =====
+    return {"letter": "-", "confidence": 0.0, "gesture": None}

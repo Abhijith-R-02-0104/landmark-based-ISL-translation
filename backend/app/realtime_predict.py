@@ -25,20 +25,18 @@ hands = mp_hands.Hands(
 
 # ================= PARAMETERS =================
 SEQUENCE_LENGTH = 30
-CONFIRM_THRESHOLD = 3
 CONFIDENCE_THRESHOLD = 0.80
+PREDICTION_WINDOW = 15
 
 # ================= CAMERA =================
 cap = cv2.VideoCapture(0)
 
 sequence = []
 sentence = []
+predictions = []
 
 prediction_text = "Press 's' to Start"
 confidence_text = ""
-
-last_prediction = None
-confirm_count = 0
 
 capturing = False
 
@@ -66,14 +64,26 @@ while True:
 
             landmarks = []
 
+            # 🔥 SAME NORMALIZATION AS TRAINING
+            wrist = hand_landmarks.landmark[0]
+            wrist_x, wrist_y, wrist_z = wrist.x, wrist.y, wrist.z
+
             for lm in hand_landmarks.landmark:
-                landmarks.extend([lm.x, lm.y, lm.z])
+                landmarks.extend([
+                    lm.x - wrist_x,
+                    lm.y - wrist_y,
+                    lm.z - wrist_z
+                ])
 
             sequence.append(landmarks)
 
             # sliding window
             if len(sequence) > SEQUENCE_LENGTH:
                 sequence = sequence[-SEQUENCE_LENGTH:]
+
+    elif capturing:
+        prediction_text = "No hand detected"
+        predictions = []
 
     # ================= PREDICTION =================
     if len(sequence) == SEQUENCE_LENGTH:
@@ -87,26 +97,33 @@ while True:
 
         if confidence > CONFIDENCE_THRESHOLD:
 
-            if predicted_class == last_prediction:
-                confirm_count += 1
-            else:
-                confirm_count = 1
-                last_prediction = predicted_class
+            predictions.append(predicted_class)
 
-            if confirm_count >= CONFIRM_THRESHOLD:
+            if len(predictions) > PREDICTION_WINDOW:
+                predictions.pop(0)
 
-                prediction_text = f"Confirmed: {predicted_class}"
+            # 🔥 Strong N-frame confirmation
+            if len(predictions) == PREDICTION_WINDOW and len(set(predictions)) == 1:
+
+                final_prediction = predictions[0]
+
+                prediction_text = f"Confirmed: {final_prediction}"
                 confidence_text = f"Confidence: {confidence:.2f}"
 
                 # avoid duplicate words
-                if len(sentence) == 0 or sentence[-1] != predicted_class:
-                    sentence.append(predicted_class)
+                if len(sentence) == 0 or sentence[-1] != final_prediction:
+                    sentence.append(final_prediction)
+
+                # 🔥 reset after confirmation
+                predictions = []
+                sequence = []
 
         else:
             prediction_text = "Low confidence"
             confidence_text = ""
+            predictions = []
 
-    # ================= DISPLAY TEXT =================
+    # ================= DISPLAY =================
     cv2.putText(
         frame,
         prediction_text,
@@ -141,26 +158,27 @@ while True:
 
     key = cv2.waitKey(1) & 0xFF
 
-    # ================= START CAPTURE =================
+    # ================= START =================
     if key == ord('s'):
         capturing = True
         sequence = []
+        predictions = []
         prediction_text = "Capturing..."
         confidence_text = ""
-        last_prediction = None
-        confirm_count = 0
 
-    # ================= PAUSE CAPTURE =================
+    # ================= PAUSE =================
     if key == ord('x'):
         capturing = False
+        sequence = []
+        predictions = []
         prediction_text = "Paused"
 
-    # ================= CLEAR SENTENCE =================
+    # ================= CLEAR =================
     if key == ord('c'):
         sentence = []
 
     # ================= EXIT =================
-    if key == 27:  # ESC
+    if key == 27:
         break
 
 cap.release()
